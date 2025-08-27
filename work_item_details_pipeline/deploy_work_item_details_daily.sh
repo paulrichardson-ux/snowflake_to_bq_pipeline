@@ -4,11 +4,12 @@ set -e
 PROJECT_ID=$(gcloud config get-value project) # Or set explicitly 'red-octane-444308-f4'
 REGION="us-central1" # Or your preferred region
 FUNCTION_NAME="sync-work-item-details-daily-to-bq"
-SOURCE_DIR="./work_item_details_pipeline/work_item_details_sync_daily" # Relative path from where script is run (likely workspace root)
+SOURCE_DIR="./work_item_details_sync_daily" # Relative path from work_item_details_pipeline directory
 ENTRY_POINT="sync_daily_incremental"
 RUNTIME="python311" # Match the runtime from the other script
-MEMORY="1024MB" # Increased memory slightly, can adjust
-TIMEOUT="900s"  # Increased timeout to match full sync (15 mins) for handling backlogs
+# OPTIMIZED RESOURCES: Prevent timeouts with better configuration
+MEMORY="2048MB" # Doubled memory for larger batch processing (was 1024MB)
+TIMEOUT="1800s" # Increased to 30 minutes for reliability (was 900s/15min)
 SERVICE_ACCOUNT="karbon-bq-sync@${PROJECT_ID}.iam.gserviceaccount.com" # Use the same SA
 BQ_DATASET="karbon_data"
 
@@ -32,7 +33,7 @@ gcloud functions deploy ${FUNCTION_NAME} \
   --memory=${MEMORY} \
   --timeout=${TIMEOUT} \
   --min-instances=0 \
-  --max-instances=5 \
+  --max-instances=3 \
   --project=${PROJECT_ID} \
   --service-account=${SERVICE_ACCOUNT} \
   --set-env-vars=${ENV_VARS}

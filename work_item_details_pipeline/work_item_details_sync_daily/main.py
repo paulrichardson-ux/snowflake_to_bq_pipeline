@@ -2,10 +2,12 @@ import os
 import json
 import uuid
 import datetime
+import time
 from decimal import Decimal
 from google.cloud import secretmanager, bigquery
 from google.api_core.exceptions import NotFound
 import snowflake.connector
+from functools import wraps
 
 def get_snowflake_creds():
     # Load individual Snowflake secrets from Secret Manager
@@ -28,9 +30,9 @@ def get_snowflake_creds():
         "schema": access_secret("SNOWFLAKE_SCHEMA"),
     }
 
-def get_bq_schema_from_snowflake(sf_creds):
-    """Connects to Snowflake and derives a BigQuery schema from WORK_ITEM_DETAILS."""
-    conn = snowflake.connector.connect(
+def get_snowflake_connection_with_timeouts(sf_creds):
+    """Create Snowflake connection with optimized timeout settings"""
+    return snowflake.connector.connect(
         user=sf_creds["user"],
         password=sf_creds["password"],
         account=sf_creds["account"],
@@ -38,7 +40,36 @@ def get_bq_schema_from_snowflake(sf_creds):
         database=sf_creds["database"],
         schema=sf_creds["schema"],
         role=sf_creds.get("role"),
+        # Optimized connection settings
+        login_timeout=60,
+        network_timeout=300,
+        socket_timeout=300,
+        client_session_keep_alive=True,
+        client_session_keep_alive_heartbeat_frequency=900
     )
+
+def retry_on_timeout(max_retries=3, delay=30):
+    """Retry decorator for handling timeouts"""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except (snowflake.connector.errors.OperationalError, 
+                        TimeoutError, Exception) as e:
+                    if attempt == max_retries - 1:
+                        print(f"Final attempt failed: {e}")
+                        raise
+                    print(f"Attempt {attempt + 1} failed: {e}. Retrying in {delay}s...")
+                    time.sleep(delay)
+            return None
+        return wrapper
+    return decorator
+
+def get_bq_schema_from_snowflake(sf_creds):
+    """Connects to Snowflake and derives a BigQuery schema from WORK_ITEM_DETAILS."""
+    conn = get_snowflake_connection_with_timeouts(sf_creds)
     cs = conn.cursor()
     try:
         # Get column names and types from Snowflake for work_item_details table
@@ -82,12 +113,16 @@ def sync_daily_incremental(request):
     dataset_id = os.getenv("BQ_DATASET")
     target_table_id = f"{project_id}.{dataset_id}.WORK_ITEM_DETAILS_BQ"
 
-    # Define the date range: today +/- 90 days
+    # OPTIMIZED: Narrower date range for daily sync efficiency
+    # Old: ±90 days = 180-day window (916K+ rows)
+    # New: -7 to +30 days = 37-day window (much smaller)
     today = datetime.date.today()
-    start_date = today - datetime.timedelta(days=90)
-    end_date = today + datetime.timedelta(days=90)
+    start_date = today - datetime.timedelta(days=7)   # Last 7 days for recent changes
+    end_date = today + datetime.timedelta(days=30)    # Next 30 days for upcoming work
     start_date_str = start_date.isoformat()
     end_date_str = end_date.isoformat()
+    
+    print(f"OPTIMIZATION: Reduced date range from 180 days to 37 days for daily sync")
 
     if not project_id or not dataset_id:
         raise ValueError("GOOGLE_CLOUD_PROJECT and BQ_DATASET environment variables must be set.")
@@ -142,19 +177,25 @@ def sync_daily_incremental(request):
         print(f"Temporary table {temp_table_id} created.")
 
         # 1. Fetch data from Snowflake in batches and load into temp table
-        conn = snowflake.connector.connect(
-            user=sf_creds["user"], password=sf_creds["password"], account=sf_creds["account"],
-            warehouse=sf_creds["warehouse"], database=sf_creds["database"], schema=sf_creds["schema"],
-            role=sf_creds.get("role")
-        )
+        print("Establishing optimized Snowflake connection with timeout settings...")
+        conn = get_snowflake_connection_with_timeouts(sf_creds)
         cs = conn.cursor()
         offset = 0
-        batch_size = 20 # Use a smaller batch size if memory is still a concern, but 20 is fine
+        # CRITICAL FIX: Increase batch size from 20 to 5000 (250x improvement)
+        # This reduces 45,804 batches to ~183 batches (99.6% reduction in DB calls)
+        batch_size = 5000  # Match full sync performance
+        print(f"PERFORMANCE FIX: Using optimized batch size of {batch_size} (was 20)")
         total_rows_fetched = 0
         sf_cols = None # Get column names once
 
         try:
+            batch_number = 0
+            sync_start_time = time.time()
+            
             while True:
+                batch_start_time = time.time()
+                batch_number += 1
+                
                 query = f"""
                     SELECT *
                     FROM {sf_creds["schema"]}.WORK_ITEM_DETAILS
@@ -162,9 +203,15 @@ def sync_daily_incremental(request):
                     ORDER BY WORK_ITEM_ID, REPORTING_DATE
                     LIMIT {batch_size} OFFSET {offset}
                 """
-                print(f"Fetching batch from Snowflake WORK_ITEM_DETAILS: offset={offset}, batch_size={batch_size}")
-                cs.execute(query)
-                sf_rows = cs.fetchall()
+                print(f"BATCH {batch_number}: Fetching from Snowflake: offset={offset}, batch_size={batch_size}")
+                
+                # Execute with retry logic
+                @retry_on_timeout(max_retries=3, delay=10)
+                def execute_snowflake_query():
+                    cs.execute(query)
+                    return cs.fetchall()
+                
+                sf_rows = execute_snowflake_query()
 
                 if not sf_cols:
                      sf_cols = [col[0] for col in cs.description] # Get column names on first fetch
@@ -174,9 +221,14 @@ def sync_daily_incremental(request):
                     break # Exit loop when no more rows are fetched
 
                 total_rows_fetched += len(sf_rows)
-                print(f"Fetched {len(sf_rows)} rows in this batch. Total fetched: {total_rows_fetched}")
+                fetch_duration = time.time() - batch_start_time
+                
+                # Performance logging
+                print(f"BATCH {batch_number}: Fetched {len(sf_rows)} rows in {fetch_duration:.2f}s. Total: {total_rows_fetched}")
+                print(f"PERF_METRIC: Batch:{batch_number} | Size:{len(sf_rows)} | FetchRate:{len(sf_rows)/fetch_duration:.1f} rows/s")
 
                 # Prepare and load this batch into the single temp table
+                transform_start_time = time.time()
                 bq_rows_to_load = []
                 for row in sf_rows:
                     row_dict = {}
@@ -190,13 +242,33 @@ def sync_daily_incremental(request):
                             row_dict[col_name] = value
                     bq_rows_to_load.append(row_dict)
 
-                print(f"Loading batch of {len(bq_rows_to_load)} rows into {temp_table_id}...")
-                errors = bq_client.insert_rows_json(temp_table_id, bq_rows_to_load)
+                transform_duration = time.time() - transform_start_time
+                print(f"BATCH {batch_number}: Data transformation completed in {transform_duration:.2f}s")
+
+                # Load to BigQuery with retry
+                load_start_time = time.time()
+                print(f"BATCH {batch_number}: Loading {len(bq_rows_to_load)} rows to BigQuery...")
+                
+                @retry_on_timeout(max_retries=3, delay=5)
+                def load_to_bigquery():
+                    return bq_client.insert_rows_json(temp_table_id, bq_rows_to_load)
+                
+                errors = load_to_bigquery()
                 if errors:
                     print(f"Errors loading batch into temp table {temp_table_id}: {errors}")
-                    # Decide on error handling: break, continue, log, raise?
-                    # For now, let's raise an error to stop the process if a batch fails.
                     raise RuntimeError(f"Failed to load batch data into {temp_table_id}")
+
+                load_duration = time.time() - load_start_time
+                batch_total_duration = time.time() - batch_start_time
+                
+                # Comprehensive performance metrics
+                print(f"BATCH {batch_number}: BigQuery load completed in {load_duration:.2f}s")
+                print(f"BATCH {batch_number}: Total batch time: {batch_total_duration:.2f}s | Overall rate: {len(sf_rows)/batch_total_duration:.1f} rows/s")
+                
+                # Progress tracking
+                elapsed_time = time.time() - sync_start_time
+                estimated_total_time = (elapsed_time / total_rows_fetched) * (total_rows_fetched + batch_size * 10) if total_rows_fetched > 0 else 0
+                print(f"PROGRESS: {total_rows_fetched} rows processed in {elapsed_time:.1f}s | Est. completion: {estimated_total_time:.1f}s")
 
                 offset += batch_size # Prepare for the next batch
 

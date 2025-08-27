@@ -1,0 +1,95 @@
+name: Deploy Pipeline Components
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:  # Allow manual triggering
+
+env:
+  PROJECT_ID: red-octane-444308-f4
+  REGION: us-central1
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+
+    - name: Deploy Pipeline Monitor
+      run: |
+        echo "Deploying pipeline monitoring function..."
+        gcloud functions deploy pipeline-scheduler-monitor \
+          --runtime python311 \
+          --trigger-http \
+          --allow-unauthenticated \
+          --memory 512MB \
+          --timeout 300s \
+          --service-account karbon-bq-sync@$PROJECT_ID.iam.gserviceaccount.com \
+          --region $REGION \
+          --source . \
+          --entry-point monitor_schedulers
+
+    - name: Deploy Dashboard
+      run: |
+        echo "Deploying dashboard..."
+        ./deploy_enhanced_dashboard.sh
+
+    - name: Validate Deployment
+      run: |
+        echo "Validating deployment..."
+        python3 -c "
+        import requests
+        import sys
+        
+        # Test pipeline monitor endpoint
+        url = 'https://$REGION-$PROJECT_ID.cloudfunctions.net/pipeline-scheduler-monitor'
+        try:
+            response = requests.get(url, timeout=30)
+            if response.status_code == 200:
+                print('✅ Pipeline monitor is healthy')
+            else:
+                print(f'⚠️ Pipeline monitor returned status: {response.status_code}')
+                sys.exit(1)
+        except Exception as e:
+            print(f'❌ Pipeline monitor validation failed: {e}')
+            sys.exit(1)
+        "
+
+    - name: Notify Success
+      if: success()
+      run: |
+        echo "✅ Deployment completed successfully"
+        # Optional: Send notification to your monitoring system
+        curl -X POST "https://$REGION-$PROJECT_ID.cloudfunctions.net/pipeline-scheduler-monitor" \
+          -H "Content-Type: application/json" \
+          -d '{"deployment_notification": true, "status": "success"}'
+
+    - name: Notify Failure
+      if: failure()
+      run: |
+        echo "❌ Deployment failed"
+        # Optional: Send failure notification
+        curl -X POST "https://$REGION-$PROJECT_ID.cloudfunctions.net/pipeline-scheduler-monitor" \
+          -H "Content-Type: application/json" \
+          -d '{"deployment_notification": true, "status": "failed"}'
