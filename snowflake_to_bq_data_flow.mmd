@@ -1,0 +1,67 @@
+graph TB
+    subgraph "🏢 SOURCE SYSTEMS"
+        K["<b>Karbon</b><br/>• Individual Budget Allocations<br/>• Work Item Details<br/>• Time Tracking Entries<br/>• Client/User Data"]
+    end
+    
+    subgraph "❄️ SNOWFLAKE DATA WAREHOUSE"
+        SF_BVA["<b>WORK_ITEM_BUDGET_VS_ACTUAL</b><br/>• Individual user budgets<br/>• Task-level allocations<br/>• Role-based budgets"]
+        SF_WD["<b>WORK_ITEM_DETAILS</b><br/>• Work item metadata<br/>• Client assignments<br/>• Due dates & status"]
+        SF_TE["<b>USER_TIME_ENTRY</b><br/>• Individual time entries<br/>• Billable/non-billable<br/>• Daily time logs"]
+        SF_DIM["<b>DIMENSION TABLES</b><br/>• DIMN_CLIENT<br/>• DIMN_USER<br/>• DIMN_TENANT_TEAM<br/>• DIMN_CLIENT_GROUP"]
+    end
+    
+    subgraph "☁️ GOOGLE CLOUD FUNCTIONS"
+        CF_BVA["<b>Budget vs Actual Sync</b><br/>🔄 Full: sync-full-work-item-budget-vs-actual-to-bq<br/>📅 Daily: sync-work-item-budget-vs-actual-daily-to-bq<br/>⏰ Schedule: 6:00 AM UTC"]
+        CF_WD["<b>Work Item Details Sync</b><br/>🔄 Full: work-item-details-sync-full<br/>📅 Daily: work-item-details-sync-daily<br/>⏰ Schedule: 6:30 AM UTC"]
+        CF_TE["<b>Time Entry Sync</b><br/>🔄 Full: time-details-sync-full<br/>📅 Daily: time-details-sync-daily<br/>⏰ Schedule: 8:00 AM UTC"]
+        CF_DIM["<b>Dimension Syncs</b><br/>📅 Client: 8:00 AM<br/>📅 User: 8:00 AM<br/>📅 Teams: 6:00-7:00 AM<br/>📅 Client Groups: 6:30 AM"]
+    end
+    
+    subgraph "🗄️ BIGQUERY RAW TABLES"
+        BQ_BVA["<b>WORK_ITEM_BUDGET_VS_ACTUAL_BQ</b><br/>📊 35,276 records<br/>🔑 WORK_ITEM_ID + REPORTING_DATE<br/>📅 Latest: 2025-07-15"]
+        BQ_WD["<b>WORK_ITEM_DETAILS_BQ</b><br/>📊 1,054,401 records<br/>🔑 WORK_ITEM_ID + REPORTING_DATE<br/>📅 Latest: 2025-07-14"]
+        BQ_TE["<b>USER_TIME_ENTRY_BQ</b><br/>📊 31,383 records<br/>🔑 TIME_ENTRY_ID<br/>📅 Latest: 2025-07-23"]
+        BQ_DIM["<b>DIMENSION TABLES</b><br/>• CLIENT_DIMENSION (254)<br/>• USER_DIMENSION (37)<br/>• TENANT_TEAM_DIMENSION (6)<br/>• CLIENT_GROUP_DIMENSION (112)"]
+    end
+    
+    subgraph "🔄 BIGQUERY ANALYTICS VIEWS"
+        BQ_CV["<b>work_item_budget_vs_actual_corrected_view</b><br/>🎯 Purpose: Fix date filtering<br/>• Uses work item due dates<br/>• Corrects sync date issues<br/>• Adds budget calculations"]
+        BQ_V4["<b>WORK_ITEM_BUDGET_TIME_TRACKING_VIEW_V4</b><br/>🎯 Purpose: Work item level analytics<br/>• Aggregated work item budgets<br/>• Time tracking summaries<br/>• Client & productivity data"]
+    end
+    
+    subgraph "⭐ FINAL ANALYTICS VIEW"
+        BQ_V5["<b>WORK_ITEM_INDIVIDUAL_BUDGET_TIME_TRACKING_VIEW_V5</b><br/>🎯 Purpose: Individual user budget vs actual<br/>• Shows ALL users (budget OR time)<br/>• Individual budget allocations<br/>• Actual time tracking per user<br/>• Budget variance analysis<br/>• Handles unassigned budgets<br/>• Comprehensive deduplication"]
+    end
+    
+    subgraph "📊 BUSINESS INTELLIGENCE"
+        RPT["<b>Reports & Dashboards</b><br/>• Budget vs Actual Analysis<br/>• Individual Performance<br/>• Client Profitability<br/>• Time Utilization"]
+    end
+    
+    K --> SF_BVA
+    K --> SF_WD
+    K --> SF_TE
+    K --> SF_DIM
+    
+    SF_BVA --> CF_BVA
+    SF_WD --> CF_WD
+    SF_TE --> CF_TE
+    SF_DIM --> CF_DIM
+    
+    CF_BVA --> BQ_BVA
+    CF_WD --> BQ_WD
+    CF_TE --> BQ_TE
+    CF_DIM --> BQ_DIM
+    
+    BQ_BVA --> BQ_CV
+    BQ_WD --> BQ_CV
+    BQ_CV --> BQ_V5
+    BQ_WD --> BQ_V5
+    BQ_TE --> BQ_V5
+    BQ_DIM --> BQ_V5
+    
+    BQ_WD --> BQ_V4
+    BQ_TE --> BQ_V4
+    BQ_DIM --> BQ_V4
+    
+    BQ_V5 --> RPT
+    BQ_V4 --> RPT 

@@ -1,0 +1,37 @@
+{
+  "displayName": "Pipeline Scheduler Failures",
+  "documentation": {
+    "content": "Alert when Cloud Scheduler jobs fail",
+    "mimeType": "text/markdown",
+    "subject": "Pipeline Scheduler Failure"
+  },
+  "combiner": "OR",
+  "enabled": true,
+  "alertStrategy": {
+    "notificationPrompts": ["OPENED"]
+  },
+  "conditions": [
+    {
+      "displayName": "Scheduler job failures",
+      "conditionThreshold": {
+        "filter": "resource.type=\"global\" AND metric.type=\"logging.googleapis.com/user/scheduler_job_failed\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 0,
+        "duration": "0s",
+        "aggregations": [
+          {
+            "alignmentPeriod": "300s",
+            "perSeriesAligner": "ALIGN_DELTA",
+            "crossSeriesReducer": "REDUCE_SUM"
+          }
+        ],
+        "trigger": {
+          "count": 1
+        }
+      }
+    }
+  ],
+  "notificationChannels": [
+    "projects/red-octane-444308-f4/notificationChannels/5760175037023318375"
+  ]
+}

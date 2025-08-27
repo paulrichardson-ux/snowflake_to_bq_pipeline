@@ -1,0 +1,5 @@
+functions-framework>=3.0.0
+google-cloud-bigquery>=3.0.0
+google-cloud-secret-manager>=2.0.0
+snowflake-connector-python>=3.0.0
+google-cloud-logging>=3.0.0 

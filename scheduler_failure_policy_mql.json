@@ -1,0 +1,26 @@
+{
+  "displayName": "Pipeline Scheduler Failures (MQL)",
+  "documentation": {
+    "content": "Alert when Cloud Scheduler jobs fail (logs-based metric)",
+    "mimeType": "text/markdown",
+    "subject": "Pipeline Scheduler Failure"
+  },
+  "combiner": "OR",
+  "enabled": true,
+  "alertStrategy": {
+    "notificationPrompts": ["OPENED"]
+  },
+  "conditions": [
+    {
+      "displayName": "Scheduler job failures (MQL)",
+      "conditionMonitoringQueryLanguage": {
+        "query": "fetch global\n| metric 'logging.googleapis.com/user/scheduler_job_failed'\n| align delta(5m)\n| every 5m\n| group_by [], sum(val())\n| condition val() > 0",
+        "duration": "0s",
+        "trigger": {"count": 1}
+      }
+    }
+  ],
+  "notificationChannels": [
+    "projects/red-octane-444308-f4/notificationChannels/5760175037023318375"
+  ]
+}
