@@ -1,0 +1,105 @@
+# Unified Pipeline Configuration
+# This centralized configuration manages all pipeline settings
+
+project:
+  gcp_project_id: "red-octane-444308-f4"
+  bigquery_dataset: "karbon_data"
+  region: "us-central1"
+
+snowflake:
+  warehouse: "COMPUTE_WH"
+  database: "KARBON"
+  schema: "PUBLIC"
+  connection_timeout: 300
+  query_timeout: 600
+  
+# Pipeline definitions with their specific configurations
+pipelines:
+  client_dimension:
+    source_table: "DIMN_CLIENT"
+    target_table: "CLIENT_DIMENSION"
+    primary_key: "CLIENT_ID"
+    sync_type: "full"  # full or incremental
+    batch_size: 5000
+    schedule: "0 8 * * *"  # Daily at 8 AM
+    
+  client_group_dimension:
+    source_table: "DIMN_CLIENT_GROUP"
+    target_table: "CLIENT_GROUP_DIMENSION"
+    primary_key: "CLIENT_GROUP_ID"
+    sync_type: "full"
+    batch_size: 5000
+    schedule: "30 6 * * *"  # Daily at 6:30 AM
+    
+  tenant_team_dimension:
+    source_table: "DIMN_TENANT_TEAM"
+    target_table: "TENANT_TEAM_DIMENSION"
+    primary_key: "TEAM_ID"
+    sync_type: "full"
+    batch_size: 5000
+    schedule: "0 6 * * *"  # Daily at 6 AM
+    
+  tenant_team_member_dimension:
+    source_table: "DIMN_TENANT_TEAM_MEMBER"
+    target_table: "TENANT_TEAM_MEMBER_DIMENSION"
+    primary_key: "TEAM_MEMBER_ID"
+    sync_type: "full"
+    batch_size: 5000
+    schedule: "0 7 * * *"  # Daily at 7 AM
+    
+  user_dimension:
+    source_table: "DIMN_USER"
+    target_table: "USER_DIMENSION"
+    primary_key: "USER_ID"
+    sync_type: "full"
+    batch_size: 5000
+    schedule: "0 8 * * *"  # Daily at 8 AM
+    
+  work_item_details:
+    source_table: "WORK_ITEM_DETAILS"
+    target_table: "WORK_ITEM_DETAILS_BQ"
+    primary_key: "WORK_ITEM_ID"
+    sync_type: "incremental"
+    batch_size: 10000
+    schedule: "30 6 * * *"  # Daily at 6:30 AM
+    incremental_column: "LAST_MODIFIED_TIME"
+    lookback_days: 7
+    
+  work_item_budget_vs_actual:
+    source_table: "WORK_ITEM_BUDGET_VS_ACTUAL"
+    target_table: "WORK_ITEM_BUDGET_VS_ACTUAL_BQ"
+    primary_key: "WORK_ITEM_ID"
+    sync_type: "full"
+    batch_size: 10000
+    schedule: "0 6 * * *"  # Daily at 6 AM
+    
+  user_time_entry:
+    source_table: "USER_TIME_ENTRY_DETAIL"
+    target_table: "USER_TIME_ENTRY_BQ"
+    primary_key: "TIME_ENTRY_ID"
+    sync_type: "incremental"
+    batch_size: 10000
+    schedule: "0 2 * * *"  # Daily at 2 AM
+    incremental_column: "REPORTING_DATE"
+    lookback_days: 30
+
+# Performance settings
+performance:
+  max_parallel_batches: 5
+  connection_pool_size: 3
+  retry_attempts: 3
+  retry_delay_seconds: 5
+  temp_table_expiration_hours: 2
+
+# Monitoring settings
+monitoring:
+  enable_metrics: true
+  enable_structured_logging: true
+  alert_on_failure: true
+  slack_webhook_secret: "SLACK_WEBHOOK_URL"  # Secret Manager key
+  
+# Data quality settings
+data_quality:
+  enable_deduplication: true
+  enable_validation: true
+  validation_threshold_percent: 5  # Alert if row count differs by more than 5%
